@@ -1,0 +1,27 @@
+FROM node:20-alpine
+
+RUN corepack enable && corepack prepare pnpm@10.29.3 --activate
+
+WORKDIR /app
+
+# Copy workspace configuration
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
+
+# Copy shared packages
+COPY packages/shared/package.json packages/shared/
+COPY packages/mcp-client/package.json packages/mcp-client/
+
+# Copy agent app
+COPY apps/agent/package.json apps/agent/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY packages/shared/ packages/shared/
+COPY packages/mcp-client/ packages/mcp-client/
+COPY apps/agent/ apps/agent/
+
+EXPOSE 4000
+
+CMD ["pnpm", "--filter", "@aigateway/agent", "dev"]

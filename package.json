@@ -1,0 +1,27 @@
+{
+  "name": "aigateway-agent",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx turbo run dev",
+    "build": "npx turbo run build",
+    "test": "npx turbo run test",
+    "dev:web": "npx turbo run dev --filter=@aigateway/web",
+    "dev:bff": "npx turbo run dev --filter=@aigateway/bff",
+    "dev:agent": "npx turbo run dev --filter=@aigateway/agent",
+    "dev:all": "npx turbo run dev --parallel",
+    "docker:up": "docker compose -f deploy/docker/docker-compose.yml up --build -d",
+    "docker:down": "docker compose -f deploy/docker/docker-compose.yml down",
+    "docker:logs": "docker compose -f deploy/docker/docker-compose.yml logs -f"
+  },
+  "packageManager": "pnpm@10.29.3",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.18",
+    "vitest": "^4.0.18"
+  }
+}

@@ -1,0 +1,27 @@
+FROM node:20-alpine
+
+RUN corepack enable && corepack prepare pnpm@10.29.3 --activate
+
+WORKDIR /app
+
+# Copy workspace configuration
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
+
+# Copy shared packages
+COPY packages/shared/package.json packages/shared/
+COPY packages/ui-components/package.json packages/ui-components/
+
+# Copy web app
+COPY apps/web/package.json apps/web/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY packages/shared/ packages/shared/
+COPY packages/ui-components/ packages/ui-components/
+COPY apps/web/ apps/web/
+
+EXPOSE 5173
+
+CMD ["pnpm", "--filter", "@aigateway/web", "dev", "--", "--host", "0.0.0.0"]

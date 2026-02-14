@@ -1,0 +1,135 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 25% 8%;
+    --foreground: 210 20% 90%;
+
+    --card: 220 22% 11%;
+    --card-foreground: 210 20% 90%;
+
+    --popover: 220 22% 11%;
+    --popover-foreground: 210 20% 90%;
+
+    --primary: 185 100% 50%;
+    --primary-foreground: 220 25% 6%;
+
+    --secondary: 220 20% 16%;
+    --secondary-foreground: 210 15% 75%;
+
+    --muted: 220 18% 14%;
+    --muted-foreground: 215 12% 50%;
+
+    --accent: 185 60% 20%;
+    --accent-foreground: 185 100% 70%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 18%;
+    --input: 220 18% 15%;
+    --ring: 185 100% 50%;
+
+    --radius: 0.75rem;
+
+    --success: 145 80% 42%;
+    --success-foreground: 145 80% 90%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 38 92% 95%;
+    --info: 210 100% 56%;
+    --info-foreground: 210 100% 90%;
+
+    --glow-primary: 0 0 20px hsl(185 100% 50% / 0.3);
+    --glow-success: 0 0 16px hsl(145 80% 42% / 0.3);
+    --glow-warning: 0 0 16px hsl(38 92% 50% / 0.3);
+    --glow-destructive: 0 0 16px hsl(0 72% 51% / 0.3);
+
+    --chat-user: 220 20% 16%;
+    --chat-agent: 220 22% 11%;
+    --chat-agent-border: 220 15% 20%;
+
+    --sidebar-background: 220 25% 7%;
+    --sidebar-foreground: 210 15% 75%;
+    --sidebar-primary: 185 100% 50%;
+    --sidebar-primary-foreground: 220 25% 6%;
+    --sidebar-accent: 220 18% 14%;
+    --sidebar-accent-foreground: 210 15% 75%;
+    --sidebar-border: 220 15% 15%;
+    --sidebar-ring: 185 100% 50%;
+
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-sans: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Glow animation */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: var(--glow-primary); }
+  50% { box-shadow: 0 0 30px hsl(185 100% 50% / 0.5); }
+}
+
+@keyframes typing-dots {
+  0%, 60%, 100% { opacity: 0.3; }
+  30% { opacity: 1; }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Typing cursor */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.typing-cursor::after {
+  content: '\25CA';
+  animation: blink 0.8s step-end infinite;
+  color: hsl(var(--primary));
+  font-size: 0.85em;
+  margin-left: 1px;
+}
+
+/* Status dot pulse */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.3); }
+}
+.status-dot-pulse {
+  animation: pulse-dot 2s ease-in-out infinite;
+}

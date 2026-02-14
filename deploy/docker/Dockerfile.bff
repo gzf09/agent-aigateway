@@ -1,0 +1,25 @@
+FROM node:20-alpine
+
+RUN corepack enable && corepack prepare pnpm@10.29.3 --activate
+
+WORKDIR /app
+
+# Copy workspace configuration
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
+
+# Copy shared packages
+COPY packages/shared/package.json packages/shared/
+
+# Copy bff app
+COPY apps/bff/package.json apps/bff/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY packages/shared/ packages/shared/
+COPY apps/bff/ apps/bff/
+
+EXPOSE 3000
+
+CMD ["pnpm", "--filter", "@aigateway/bff", "dev"]

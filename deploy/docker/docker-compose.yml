@@ -1,0 +1,65 @@
+services:
+  higress:
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/all-in-one:latest
+    ports:
+      - "8080:8080"
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  agent:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.agent
+    ports:
+      - "4000:4000"
+    environment:
+      - AGENT_ENGINE_PORT=4000
+      - REDIS_URL=redis://redis:6379
+      - MOCK_MODE=${MOCK_MODE:-true}
+      - HIGRESS_CONSOLE_URL=http://higress:8080
+      - MCP_SERVER_URL=
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+    depends_on:
+      higress:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  bff:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.bff
+    ports:
+      - "3000:3000"
+    environment:
+      - BFF_PORT=3000
+      - AGENT_URL=http://agent:4000
+    depends_on:
+      - agent
+
+  web:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.web
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_BFF_URL=http://bff:3000
+    depends_on:
+      - bff
