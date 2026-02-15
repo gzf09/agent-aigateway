@@ -8,7 +8,21 @@ export type AgentResponseChunk =
   | { type: 'tool_result'; result: ToolCallResult }
   | { type: 'rollback_hint'; snapshotId: string; versionId: number }
   | { type: 'dashboard_event'; event: DashboardEvent }
+  | { type: 'debug_log'; log: DebugLogEntry }
   | { type: 'error'; error: AgentError };
+
+// ===== Debug Log =====
+export interface DebugLogEntry {
+  id: string;
+  timestamp: number;
+  category: 'llm' | 'mcp' | 'intent';
+  action: string;
+  request?: unknown;
+  response?: unknown;
+  duration?: number;
+  requestId?: string;
+  requestMessage?: string;
+}
 
 // ===== Confirm Cards =====
 export type ConfirmCard = SummaryCard | DiffCard | NameInputCard;

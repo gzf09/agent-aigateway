@@ -11,7 +11,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: registry.cn-hangzhou.cr.aliyuncs.com/library/redis:7-alpine
     ports:
       - "6379:6379"
     healthcheck:
@@ -30,11 +30,14 @@ services:
       - AGENT_ENGINE_PORT=4000
       - REDIS_URL=redis://redis:6379
       - MOCK_MODE=${MOCK_MODE:-true}
-      - HIGRESS_CONSOLE_URL=http://higress:8080
+      - HIGRESS_CONSOLE_URL=http://higress:8001
       - MCP_SERVER_URL=
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-}
+      - HIGRESS_CONSOLE_USERNAME=${HIGRESS_CONSOLE_USERNAME:-admin}
+      - HIGRESS_CONSOLE_PASSWORD=${HIGRESS_CONSOLE_PASSWORD:-admin}
     depends_on:
       higress:
         condition: service_healthy

@@ -42,12 +42,14 @@ function buildSummaryCard(toolName: string, args: Record<string, unknown>): Summ
   const resourceName = (args['name'] as string) || '';
 
   if (toolName.includes('provider')) {
-    fields.push({ label: '名称', value: resourceName });
-    fields.push({ label: '类型', value: (args['type'] as string) || '' });
+    fields.push({ label: '名称', value: resourceName || '⚠ 待填写' });
+    fields.push({ label: '类型', value: (args['type'] as string) || '⚠ 待填写' });
     fields.push({ label: '协议', value: (args['protocol'] as string) || 'openai/v1' });
     const tokens = args['tokens'] as string[] | undefined;
     if (tokens?.length) {
       fields.push({ label: 'API Key', value: tokens.map(t => maskApiKey(t)).join(', ') });
+    } else {
+      fields.push({ label: 'API Key', value: '⚠ 待填写' });
     }
   } else if (toolName.includes('route')) {
     fields.push({ label: '路由名称', value: resourceName });

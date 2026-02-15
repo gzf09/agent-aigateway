@@ -1,6 +1,12 @@
 import { create } from 'zustand';
-import type { ConfirmCard, AgentResponseChunk } from '@aigateway/shared';
+import type { ConfirmCard, AgentResponseChunk, DebugLogEntry } from '@aigateway/shared';
 import { useDashboardStore } from './dashboardStore.js';
+import { useDebugStore } from './debugStore.js';
+
+export interface ToolCallStatus {
+  toolName: string;
+  status: 'calling' | 'done' | 'error';
+}
 
 export interface ChatMessageUI {
   id: string;
@@ -9,6 +15,7 @@ export interface ChatMessageUI {
   timestamp: number;
   confirmCard?: ConfirmCard;
   toolStatus?: { toolName: string; status: 'calling' | 'done' | 'error' };
+  toolCalls?: ToolCallStatus[];
   operationResult?: { success: boolean; message: string; rollbackVersionId?: number };
   isStreaming?: boolean;
 }
@@ -19,14 +26,17 @@ interface ChatState {
   isProcessing: boolean;
   pendingConfirmCard: ConfirmCard | null;
   agentHealthy: boolean;
+  healthData: { mock?: boolean; higressConsoleUrl?: string; llm?: { provider?: string; model?: string; available?: boolean } } | null;
 
   setSessionId: (id: string) => void;
   setAgentHealthy: (v: boolean) => void;
+  setHealthData: (d: ChatState['healthData']) => void;
 
   sendMessage: (content: string) => Promise<void>;
   sendConfirm: (confirmedName?: string) => Promise<void>;
   sendCancel: () => Promise<void>;
   sendRollback: () => Promise<void>;
+  clearChat: () => Promise<void>;
 }
 
 const AGENT_BASE = '/api/session';
@@ -40,9 +50,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isProcessing: false,
   pendingConfirmCard: null,
   agentHealthy: false,
+  healthData: null,
 
   setSessionId: (id) => set({ sessionId: id }),
   setAgentHealthy: (v) => set({ agentHealthy: v }),
+  setHealthData: (d) => set({ healthData: d }),
 
   sendMessage: async (content: string) => {
     const { sessionId, isProcessing } = get();
@@ -113,6 +125,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     await streamRequest(`/api/dashboard/rollback`, { sessionId });
   },
+
+  clearChat: async () => {
+    try {
+      const resp = await fetch('/api/session/create', { method: 'POST' });
+      const data = await resp.json() as { sessionId: string };
+      sessionStorage.setItem('aigateway_sid', data.sessionId);
+      set({ sessionId: data.sessionId, messages: [], pendingConfirmCard: null, isProcessing: false });
+    } catch {
+      // If create fails, just clear messages with a local session id
+      const id = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      sessionStorage.setItem('aigateway_sid', id);
+      set({ sessionId: id, messages: [], pendingConfirmCard: null, isProcessing: false });
+    }
+  },
 }));
 
 // ===== SSE Stream Parser =====
@@ -126,7 +152,12 @@ async function streamRequest(url: string, body: unknown) {
     });
 
     if (!response.ok || !response.body) {
-      appendToLastAssistant(`[请求失败: ${response.status}]`);
+      if (response.status === 404) {
+        appendToLastAssistant('[Agent 服务不可用，请检查服务是否正在运行]');
+        useChatStore.setState({ agentHealthy: false });
+      } else {
+        appendToLastAssistant(`[请求失败: ${response.status}]`);
+      }
       finalizeStream();
       return;
     }
@@ -165,15 +196,19 @@ async function streamRequest(url: string, body: unknown) {
 function handleChunk(chunk: Record<string, unknown>) {
   switch (chunk.type) {
     case 'text':
+      // When text arrives, auto-finalize any pending tool calls (LLM responds after tools complete)
+      autoFinalizeToolCalls();
       appendToLastAssistant(chunk.content as string || '');
       break;
 
     case 'confirm_card':
+      autoFinalizeToolCalls();
       finalizeStream();
       useChatStore.setState({ pendingConfirmCard: chunk.card as ConfirmCard });
       break;
 
     case 'clarification': {
+      autoFinalizeToolCalls();
       const q = chunk.question as { question: string; options?: { label: string; value: string }[] };
       appendToLastAssistant(q.question || '');
       break;
@@ -181,25 +216,44 @@ function handleChunk(chunk: Record<string, unknown>) {
 
     case 'tool_start': {
       const toolName = chunk.toolName as string;
-      useChatStore.setState((s) => ({
-        messages: [...s.messages, {
-          id: nextId(), role: 'system', content: '',
-          timestamp: Date.now(),
-          toolStatus: { toolName, status: 'calling' },
-        }],
-      }));
+      // Attach tool call to the current streaming assistant message
+      useChatStore.setState((s) => {
+        const msgs = [...s.messages];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m && m.role === 'assistant' && m.isStreaming) {
+            const toolCalls = [...(m.toolCalls || []), { toolName, status: 'calling' as const }];
+            msgs[i] = { ...m, toolCalls };
+            break;
+          }
+        }
+        return { messages: msgs };
+      });
       break;
     }
 
     case 'tool_result': {
       const result = chunk.result as { toolName: string; success: boolean; data?: unknown; error?: string };
-      useChatStore.setState((s) => ({
-        messages: [...s.messages, {
-          id: nextId(), role: 'system', content: '',
-          timestamp: Date.now(),
-          toolStatus: { toolName: result.toolName, status: result.success ? 'done' : 'error' },
-        }],
-      }));
+      useChatStore.setState((s) => {
+        const msgs = [...s.messages];
+        // Find the last assistant message with matching tool call
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m && m.role === 'assistant' && m.toolCalls) {
+            const toolCalls = [...m.toolCalls];
+            // Find the last matching calling tool
+            for (let j = toolCalls.length - 1; j >= 0; j--) {
+              if (toolCalls[j]!.toolName === result.toolName && toolCalls[j]!.status === 'calling') {
+                toolCalls[j] = { ...toolCalls[j]!, status: result.success ? 'done' : 'error' };
+                break;
+              }
+            }
+            msgs[i] = { ...m, toolCalls };
+            break;
+          }
+        }
+        return { messages: msgs };
+      });
       break;
     }
 
@@ -212,8 +266,15 @@ function handleChunk(chunk: Record<string, unknown>) {
       break;
 
     case 'error': {
+      autoFinalizeToolCalls();
       const err = chunk.error as { message?: string };
       appendToLastAssistant(`\n[错误: ${err?.message || '未知错误'}]`);
+      break;
+    }
+
+    case 'debug_log': {
+      const log = chunk.log as DebugLogEntry;
+      useDebugStore.getState().addLog(log);
       break;
     }
 
@@ -221,6 +282,29 @@ function handleChunk(chunk: Record<string, unknown>) {
       // Stream will end naturally
       break;
   }
+}
+
+/** When text starts streaming, mark any still-calling tool calls as done */
+function autoFinalizeToolCalls() {
+  useChatStore.setState((s) => {
+    const msgs = [...s.messages];
+    let changed = false;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m && m.role === 'assistant' && m.isStreaming && m.toolCalls) {
+        const hasCallingTools = m.toolCalls.some((t) => t.status === 'calling');
+        if (hasCallingTools) {
+          const toolCalls = m.toolCalls.map((t) =>
+            t.status === 'calling' ? { ...t, status: 'done' as const } : t
+          );
+          msgs[i] = { ...m, toolCalls };
+          changed = true;
+        }
+        break;
+      }
+    }
+    return changed ? { messages: msgs } : s;
+  });
 }
 
 function appendToLastAssistant(text: string) {
@@ -239,11 +323,18 @@ function appendToLastAssistant(text: string) {
 
 function finalizeStream() {
   useChatStore.setState((s) => {
-    const msgs = s.messages.map((m) =>
-      m.isStreaming ? { ...m, isStreaming: false } : m
+    const msgs = s.messages.map((m) => {
+      if (!m.isStreaming) return m;
+      // Auto-finalize any remaining calling tools
+      const toolCalls = m.toolCalls?.map((t) =>
+        t.status === 'calling' ? { ...t, status: 'done' as const } : t
+      );
+      return { ...m, isStreaming: false, toolCalls: toolCalls || m.toolCalls };
+    });
+    // Remove empty assistant messages (no content and no tool calls)
+    const cleaned = msgs.filter((m) =>
+      !(m.role === 'assistant' && !m.isStreaming && !m.content.trim() && (!m.toolCalls || m.toolCalls.length === 0))
     );
-    // Remove empty assistant messages
-    const cleaned = msgs.filter((m) => !(m.role === 'assistant' && !m.isStreaming && !m.content.trim()));
     return { messages: cleaned, isProcessing: false };
   });
 }
@@ -261,4 +352,7 @@ async function refreshDashboard() {
       }
     }
   } catch { /* ignore */ }
+
+  // Also refresh gateway data (providers + routes) since a write op may have changed them
+  useDashboardStore.getState().fetchGatewayData();
 }

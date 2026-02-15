@@ -19,9 +19,14 @@ const PORT = parseInt(process.env['AGENT_ENGINE_PORT'] || '4000', 10);
 const REDIS_URL = process.env['REDIS_URL'] || 'redis://localhost:6379';
 const MOCK_MODE = process.env['MOCK_MODE'] === 'true';
 
+const higressAuth = process.env['HIGRESS_CONSOLE_USERNAME'] && process.env['HIGRESS_CONSOLE_PASSWORD']
+  ? { username: process.env['HIGRESS_CONSOLE_USERNAME'], password: process.env['HIGRESS_CONSOLE_PASSWORD'] }
+  : undefined;
+
 const mcpClient = new HigressMCPClient({
   serverUrl: process.env['MCP_SERVER_URL'] || '',
-  higressConsoleUrl: process.env['HIGRESS_CONSOLE_URL'] || 'http://localhost:8080',
+  higressConsoleUrl: process.env['HIGRESS_CONSOLE_URL'] || 'http://localhost:8001',
+  auth: higressAuth,
   mockMode: MOCK_MODE,
 });
 
@@ -30,7 +35,31 @@ const metrics = new MetricsCollector();
 
 // Health check
 app.get('/agent/health', (_req, res) => {
-  res.json({ status: 'ok', mock: MOCK_MODE, timestamp: Date.now() });
+  const llmConfig = orchestrator.getLLMConfig();
+  res.json({
+    status: 'ok',
+    mock: MOCK_MODE,
+    timestamp: Date.now(),
+    higressConsoleUrl: process.env['HIGRESS_CONSOLE_URL'] || 'http://localhost:8001',
+    llm: {
+      available: llmConfig.available,
+      provider: llmConfig.provider,
+      model: llmConfig.model,
+    },
+  });
+});
+
+// LLM config
+app.get('/agent/llm-config', (_req, res) => {
+  res.json({ data: orchestrator.getLLMConfig() });
+});
+
+app.put('/agent/llm-config', (req, res) => {
+  const { provider, apiKey, baseURL, model } = req.body as {
+    provider?: string; apiKey?: string; baseURL?: string; model?: string;
+  };
+  orchestrator.updateLLMConfig({ provider, apiKey, baseURL, model });
+  res.json({ data: orchestrator.getLLMConfig() });
 });
 
 // Process user message - returns SSE stream

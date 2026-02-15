@@ -64,6 +64,61 @@
     --font-mono: 'JetBrains Mono', monospace;
     --font-sans: 'Inter', system-ui, sans-serif;
   }
+
+  .light {
+    --background: 0 0% 98%;
+    --foreground: 220 15% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 15% 15%;
+
+    --primary: 200 90% 42%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 220 10% 40%;
+
+    --muted: 220 14% 94%;
+    --muted-foreground: 215 10% 48%;
+
+    --accent: 200 50% 92%;
+    --accent-foreground: 200 80% 35%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 88%;
+    --input: 220 14% 92%;
+    --ring: 200 90% 42%;
+
+    --success: 145 65% 38%;
+    --success-foreground: 145 80% 95%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 38 80% 10%;
+    --info: 210 100% 50%;
+    --info-foreground: 210 100% 95%;
+
+    --glow-primary: 0 0 12px hsl(200 90% 42% / 0.15);
+    --glow-success: 0 0 10px hsl(145 65% 38% / 0.15);
+    --glow-warning: 0 0 10px hsl(38 92% 50% / 0.15);
+    --glow-destructive: 0 0 10px hsl(0 72% 51% / 0.15);
+
+    --chat-user: 220 14% 94%;
+    --chat-agent: 0 0% 100%;
+    --chat-agent-border: 220 13% 90%;
+
+    --sidebar-background: 0 0% 97%;
+    --sidebar-foreground: 220 10% 40%;
+    --sidebar-primary: 200 90% 42%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 94%;
+    --sidebar-accent-foreground: 220 10% 40%;
+    --sidebar-border: 220 13% 88%;
+    --sidebar-ring: 200 90% 42%;
+  }
 }
 
 @layer base {

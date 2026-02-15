@@ -49,8 +49,20 @@ export class HigressMCPClient {
 
     try {
       const { method, path, body } = this.mapToolToApi(name, args);
+
+      // Log write operations for debugging
+      if (method !== 'GET') {
+        console.log(`[MCP] ${method} ${url}${path}`, body ? JSON.stringify(body) : '');
+      }
+
       const resp = await fetch(`${url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
       const data = await resp.json().catch(() => null);
+
+      // Log write operation responses
+      if (method !== 'GET') {
+        console.log(`[MCP] Response: ${resp.status}`, JSON.stringify(data));
+      }
+
       if (!resp.ok) return { success: false, error: `HTTP ${resp.status}: ${JSON.stringify(data)}` };
       return { success: true, data };
     } catch (e: unknown) {
@@ -63,8 +75,8 @@ export class HigressMCPClient {
     switch (name) {
       case 'list-ai-providers': return { method: 'GET', path: '/v1/ai/providers' };
       case 'get-ai-provider': return { method: 'GET', path: `/v1/ai/providers/${n}` };
-      case 'add-ai-provider': return { method: 'POST', path: '/v1/ai/providers', body: args };
-      case 'update-ai-provider': return { method: 'PUT', path: `/v1/ai/providers/${n}`, body: args };
+      case 'add-ai-provider': return { method: 'POST', path: '/v1/ai/providers', body: this.buildProviderBody(args) };
+      case 'update-ai-provider': return { method: 'PUT', path: `/v1/ai/providers/${n}`, body: this.buildProviderBody(args) };
       case 'delete-ai-provider': return { method: 'DELETE', path: `/v1/ai/providers/${n}` };
       case 'list-ai-routes': return { method: 'GET', path: '/v1/ai/routes' };
       case 'get-ai-route': return { method: 'GET', path: `/v1/ai/routes/${n}` };
@@ -73,6 +85,28 @@ export class HigressMCPClient {
       case 'delete-ai-route': return { method: 'DELETE', path: `/v1/ai/routes/${n}` };
       default: return { method: 'GET', path: '/' };
     }
+  }
+
+  /**
+   * Build the Higress-compatible request body for provider create/update.
+   * Higress requires `rawConfigs` with `apiTokens` (not `tokens`) and `type` for certain provider types (qwen, etc.)
+   */
+  private buildProviderBody(args: Record<string, unknown>): Record<string, unknown> {
+    const body = { ...args };
+    const type = args['type'] as string | undefined;
+    const tokens = args['tokens'] as string[] | undefined;
+    const name = args['name'] as string | undefined;
+
+    // Always build rawConfigs to ensure Higress has provider-specific configurations
+    if (type && tokens) {
+      body['rawConfigs'] = {
+        type,
+        apiTokens: tokens,
+        id: name || type,
+      };
+    }
+
+    return body;
   }
 
   private async callToolMock(name: string, args: Record<string, unknown>): Promise<{ success: boolean; data?: unknown; error?: string }> {

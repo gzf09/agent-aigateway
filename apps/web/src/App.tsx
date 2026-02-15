@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Zap, Terminal, PanelRight } from 'lucide-react';
+import { Zap, Terminal, PanelRight, MessageSquarePlus, Settings, Sun, Moon } from 'lucide-react';
 import { useChatStore } from './stores/chatStore.js';
+import { useThemeStore } from './stores/themeStore.js';
 import { ChatPanel } from './components/ChatPanel.js';
 import { Dashboard } from './components/Dashboard.js';
+import { LLMConfigDialog } from './components/LLMConfigDialog.js';
 
 function App() {
-  const { sessionId, setSessionId, agentHealthy, setAgentHealthy } = useChatStore();
+  const { sessionId, setSessionId, agentHealthy, setAgentHealthy, setHealthData, healthData, clearChat } = useChatStore();
+  const { theme, toggleTheme } = useThemeStore();
   const [showDashboard, setShowDashboard] = useState(true);
+  const [showLLMConfig, setShowLLMConfig] = useState(false);
 
   // Init session
   useEffect(() => {
@@ -29,17 +33,38 @@ function App() {
     }
   }, []);
 
-  // Health check
+  // Health check with adaptive frequency
   useEffect(() => {
+    let iv: ReturnType<typeof setInterval>;
     const check = () =>
       fetch('/api/session/health')
         .then((r) => r.ok ? r.json() : null)
-        .then((d) => setAgentHealthy(!!d))
-        .catch(() => setAgentHealthy(false));
+        .then((d) => {
+          const healthy = !!d;
+          const wasHealthy = useChatStore.getState().agentHealthy;
+          setAgentHealthy(healthy);
+          if (d) setHealthData(d);
+          // Adjust check frequency: 3s when unhealthy, 15s when healthy
+          if (healthy !== wasHealthy) {
+            clearInterval(iv);
+            iv = setInterval(check, healthy ? 15000 : 3000);
+          }
+        })
+        .catch(() => {
+          const wasHealthy = useChatStore.getState().agentHealthy;
+          setAgentHealthy(false);
+          if (wasHealthy) {
+            clearInterval(iv);
+            iv = setInterval(check, 3000);
+          }
+        });
     check();
-    const iv = setInterval(check, 15000);
+    iv = setInterval(check, 15000);
     return () => clearInterval(iv);
   }, []);
+
+  const isMock = healthData?.mock ?? true;
+  const llmModel = healthData?.llm?.model || '';
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -70,7 +95,35 @@ function App() {
               }`} />
               {agentHealthy ? '已连接' : '连接中...'}
             </div>
-            <span className="text-[11px] text-muted-foreground bg-muted px-2 py-0.5 rounded-md font-mono">Mock</span>
+            <span className={`text-[11px] px-2 py-0.5 rounded-md font-mono ${
+              isMock
+                ? 'text-muted-foreground bg-muted'
+                : 'text-success bg-success/10'
+            }`}>
+              {isMock ? 'Mock' : 'LIVE'}
+            </span>
+            <button
+              onClick={toggleTheme}
+              className="rounded-lg border border-border p-2 text-muted-foreground transition-colors hover:text-foreground"
+              title={theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'}
+            >
+              {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+            <button
+              onClick={() => setShowLLMConfig(true)}
+              className="flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              title="LLM 模型配置"
+            >
+              <Settings className="h-3 w-3" />
+              {llmModel && <span className="font-mono max-w-[80px] truncate">{llmModel}</span>}
+            </button>
+            <button
+              onClick={() => clearChat()}
+              className="rounded-lg border border-border p-2 text-muted-foreground transition-colors hover:text-foreground"
+              title="新对话"
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </button>
             {!showDashboard && (
               <button
                 onClick={() => setShowDashboard(true)}
@@ -100,6 +153,9 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* LLM Config Dialog */}
+      <LLMConfigDialog open={showLLMConfig} onClose={() => setShowLLMConfig(false)} />
     </div>
   );
 }
