@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { RollbackExecutor } from '../rollback/rollbackExecutor.js';
 import { ChangelogManager } from '../rollback/changelogManager.js';
-import { HigressMCPClient, mockProviders, mockRoutes } from '@aigateway/mcp-client';
+import { MockMCPClient, mockProviders, mockRoutes } from '@aigateway/mcp-client';
 
 describe('RollbackExecutor', () => {
   let changelog: ChangelogManager;
-  let mcpClient: HigressMCPClient;
+  let mcpClient: MockMCPClient;
   let executor: RollbackExecutor;
   const sessionId = 'test-session';
 
@@ -13,9 +13,7 @@ describe('RollbackExecutor', () => {
     mockProviders.clear();
     mockRoutes.clear();
     changelog = new ChangelogManager();
-    mcpClient = new HigressMCPClient({
-      serverUrl: '', higressConsoleUrl: 'http://localhost:8080', mockMode: true,
-    });
+    mcpClient = new MockMCPClient();
     executor = new RollbackExecutor(changelog, mcpClient);
   });
 

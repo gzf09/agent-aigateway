@@ -20,6 +20,21 @@ services:
       timeout: 3s
       retries: 5
 
+  mcp-server-higress:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.mcp-server-higress
+    ports:
+      - "5000:5000"
+    environment:
+      - MCP_SERVER_PORT=5000
+      - HIGRESS_CONSOLE_URL=http://higress:8001
+      - HIGRESS_CONSOLE_USERNAME=${HIGRESS_CONSOLE_USERNAME:-admin}
+      - HIGRESS_CONSOLE_PASSWORD=${HIGRESS_CONSOLE_PASSWORD:-admin}
+    depends_on:
+      higress:
+        condition: service_healthy
+
   agent:
     build:
       context: ../../
@@ -31,7 +46,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - MOCK_MODE=${MOCK_MODE:-true}
       - HIGRESS_CONSOLE_URL=http://higress:8001
-      - MCP_SERVER_URL=
+      - MCP_SERVER_URL=http://mcp-server-higress:5000
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
@@ -39,8 +54,8 @@ services:
       - HIGRESS_CONSOLE_USERNAME=${HIGRESS_CONSOLE_USERNAME:-admin}
       - HIGRESS_CONSOLE_PASSWORD=${HIGRESS_CONSOLE_PASSWORD:-admin}
     depends_on:
-      higress:
-        condition: service_healthy
+      mcp-server-higress:
+        condition: service_started
       redis:
         condition: service_healthy
 

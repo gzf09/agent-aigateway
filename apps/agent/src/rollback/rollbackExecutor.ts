@@ -1,11 +1,11 @@
 import type { RollbackResult, ChangeLogEntry } from '@aigateway/shared';
 import { ChangelogManager } from './changelogManager.js';
-import { HigressMCPClient } from '@aigateway/mcp-client';
+import type { IMCPClient } from '@aigateway/mcp-client';
 
 export class RollbackExecutor {
   constructor(
     private changelog: ChangelogManager,
-    private mcpClient: HigressMCPClient,
+    private mcpClient: IMCPClient,
   ) {}
 
   async rollbackLast(sessionId: string): Promise<RollbackResult> {

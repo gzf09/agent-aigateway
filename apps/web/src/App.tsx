@@ -1,17 +1,19 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Zap, Terminal, PanelRight, MessageSquarePlus, Settings, Sun, Moon } from 'lucide-react';
+import { Zap, Terminal, PanelRight, MessageSquarePlus, Settings, Sun, Moon, Plug } from 'lucide-react';
 import { useChatStore } from './stores/chatStore.js';
 import { useThemeStore } from './stores/themeStore.js';
 import { ChatPanel } from './components/ChatPanel.js';
 import { Dashboard } from './components/Dashboard.js';
 import { LLMConfigDialog } from './components/LLMConfigDialog.js';
+import { MCPConfigDialog } from './components/MCPConfigDialog.js';
 
 function App() {
   const { sessionId, setSessionId, agentHealthy, setAgentHealthy, setHealthData, healthData, clearChat } = useChatStore();
   const { theme, toggleTheme } = useThemeStore();
   const [showDashboard, setShowDashboard] = useState(true);
   const [showLLMConfig, setShowLLMConfig] = useState(false);
+  const [showMCPConfig, setShowMCPConfig] = useState(false);
 
   // Init session
   useEffect(() => {
@@ -118,6 +120,14 @@ function App() {
               {llmModel && <span className="font-mono max-w-[80px] truncate">{llmModel}</span>}
             </button>
             <button
+              onClick={() => setShowMCPConfig(true)}
+              className="flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              title="MCP Server 配置"
+            >
+              <Plug className="h-3 w-3" />
+              <span>MCP</span>
+            </button>
+            <button
               onClick={() => clearChat()}
               className="rounded-lg border border-border p-2 text-muted-foreground transition-colors hover:text-foreground"
               title="新对话"
@@ -156,6 +166,9 @@ function App() {
 
       {/* LLM Config Dialog */}
       <LLMConfigDialog open={showLLMConfig} onClose={() => setShowLLMConfig(false)} />
+
+      {/* MCP Config Dialog */}
+      <MCPConfigDialog open={showMCPConfig} onClose={() => setShowMCPConfig(false)} />
     </div>
   );
 }

@@ -94,5 +94,16 @@ export function sessionRoutes(agentUrl: string): RouterType {
     }
   });
 
+  // Proxy MCP status
+  router.get('/mcp-status', async (_req, res) => {
+    try {
+      const resp = await fetch(`${agentUrl}/agent/mcp-status`);
+      const data = await resp.json();
+      res.json(data);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   return router;
 }

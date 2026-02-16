@@ -1,8 +1,7 @@
 import type { AgentResponseChunk, ConfirmCard, PlannedToolCall, ChangeLogEntry, DashboardEvent, DebugLogEntry } from '@aigateway/shared';
 import { WRITE_TOOLS, ROLLBACK_TRIGGERS, TOOL_TO_RESOURCE_TYPE, TOOL_TO_OPERATION_TYPE } from '@aigateway/shared';
 import { generateId, maskApiKey } from '@aigateway/shared';
-import { HigressMCPClient } from '@aigateway/mcp-client';
-import { ALL_TOOLS } from '@aigateway/mcp-client';
+import type { IMCPClient } from '@aigateway/mcp-client';
 import { ConversationMemory } from '../conversation/memory.js';
 import { StaticRulePreprocessor } from '../safety/preprocessor.js';
 import { assessRisk, buildConfirmCard } from '../safety/riskAssessor.js';
@@ -23,7 +22,7 @@ interface SessionState {
 
 export class AgentOrchestrator {
   private sessions = new Map<string, SessionState>();
-  private mcpClient: HigressMCPClient;
+  private mcpClient: IMCPClient;
   private preprocessor = new StaticRulePreprocessor();
   private changelog: ChangelogManager;
   private rollbackExecutor: RollbackExecutor;
@@ -34,12 +33,13 @@ export class AgentOrchestrator {
   private _currentRequestId = '';
   private _currentRequestMessage = '';
 
-  constructor(mcpClient: HigressMCPClient, redisUrl?: string) {
+  constructor(mcpClient: IMCPClient, redisUrl?: string) {
     this.mcpClient = mcpClient;
     this.changelog = new ChangelogManager(redisUrl);
     this.rollbackExecutor = new RollbackExecutor(this.changelog, mcpClient);
     this.llmService = new LLMService();
     this.llmAvailable = this.llmService.isAvailable();
+    console.log('[Orchestrator] Initialized (v3 - JSON safeguard in dispatchIntent)');
   }
 
   private makeDebugLog(category: DebugLogEntry['category'], action: string, request?: unknown, response?: unknown, duration?: number): AgentResponseChunk {
@@ -115,8 +115,38 @@ export class AgentOrchestrator {
 
   private async *dispatchIntent(sessionId: string, session: SessionState, intent: ParsedIntent, userMessage: string): AsyncGenerator<AgentResponseChunk> {
     if (intent.type === 'clarification' || intent.type === 'chat') {
-      session.memory.addMessage('assistant', intent.message);
-      yield { type: 'text', content: intent.message };
+      let message = intent.message;
+      // Safeguard: if message looks like raw JSON intent, re-parse and re-dispatch
+      if (message.trimStart().startsWith('{')) {
+        try {
+          const reparsed = JSON.parse(message) as Record<string, unknown>;
+          if (reparsed.type === 'read' && reparsed.toolName) {
+            const readIntent: ParsedIntent = {
+              type: 'read',
+              toolCalls: [{ toolName: reparsed.toolName as string, args: (reparsed.args as Record<string, unknown>) || {} }],
+            };
+            yield* this.dispatchIntent(sessionId, session, readIntent, userMessage);
+            return;
+          }
+          if (reparsed.type === 'write' && reparsed.toolName) {
+            const writeIntent: ParsedIntent = {
+              type: 'write',
+              toolCalls: [{ toolName: reparsed.toolName as string, args: (reparsed.args as Record<string, unknown>) || {} }],
+            };
+            yield* this.dispatchIntent(sessionId, session, writeIntent, userMessage);
+            return;
+          }
+          if (reparsed.type === 'chat' && reparsed.message) {
+            message = reparsed.message as string;
+          } else if (reparsed.type === 'clarification' && reparsed.message) {
+            message = reparsed.message as string;
+          }
+        } catch {
+          // Not valid JSON — use as-is
+        }
+      }
+      session.memory.addMessage('assistant', message);
+      yield { type: 'text', content: message };
       return;
     }
 
@@ -260,38 +290,64 @@ export class AgentOrchestrator {
       response = await this.llmService.chat(INTENT_PARSING_PROMPT, llmMessages);
       this.pushDebug('llm', 'LLM Intent Parse', { system: '(INTENT_PARSING_PROMPT)', messages: llmMessages }, { raw: response }, Date.now() - t0);
 
-      // Strip markdown code block markers if present
-      const cleaned = response.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '').trim();
-      const parsed = JSON.parse(cleaned);
+      const parsed = this.extractIntentJSON(response);
+      if (!parsed) {
+        console.error('[Orchestrator] Failed to extract JSON from LLM response:', response.slice(0, 300));
+        return null;
+      }
 
       if (parsed.type === 'read' && parsed.toolName) {
         return {
           type: 'read',
-          toolCalls: [{ toolName: parsed.toolName, args: parsed.args || {} }],
+          toolCalls: [{ toolName: parsed.toolName as string, args: (parsed.args as Record<string, unknown>) || {} }],
         };
       }
       if (parsed.type === 'write' && parsed.toolName) {
         return {
           type: 'write',
-          toolCalls: [{ toolName: parsed.toolName, args: parsed.args || {} }],
+          toolCalls: [{ toolName: parsed.toolName as string, args: (parsed.args as Record<string, unknown>) || {} }],
         };
       }
       if (parsed.type === 'clarification' && parsed.message) {
-        return { type: 'clarification', message: parsed.message };
+        return { type: 'clarification', message: parsed.message as string };
       }
       if (parsed.type === 'chat' && parsed.message) {
-        return { type: 'chat', message: parsed.message };
+        return { type: 'chat', message: parsed.message as string };
       }
 
       return null;
-    } catch {
-      // LLM returned text but not valid JSON → try using it as a chat reply
-      if (response && response.length > 0 && response.length < 2000) {
-        return { type: 'chat', message: response };
-      }
-      // LLM call failed entirely — fall through to rule-based parsing
+    } catch (e: unknown) {
+      console.error('[Orchestrator] parseLLMIntent error:', (e as Error).message);
+      // Never return raw JSON-like strings as a chat message — fall through to regex parser
       return null;
     }
+  }
+
+  /**
+   * Extract a JSON intent object from the LLM response string.
+   * Handles: BOM, smart/curly quotes (common in Chinese LLMs), code fences, surrounding text.
+   */
+  private extractIntentJSON(text: string): Record<string, unknown> | null {
+    // Step 1: Normalize characters that break JSON.parse
+    const normalized = text
+      .replace(/^\uFEFF/, '')                                   // BOM
+      .replace(/[\u201C\u201D\u2018\u2019\uFF02]/g, '"')       // Smart/curly/fullwidth double quotes → "
+      .replace(/[\uFF1A]/g, ':')                                // Fullwidth colon → :
+      .replace(/[\uFF0C]/g, ',')                                // Fullwidth comma → ,
+      .replace(/^```(?:json)?\s*/s, '')                         // Opening code fence
+      .replace(/\s*```\s*$/s, '')                               // Closing code fence
+      .trim();
+
+    // Step 2: Try parsing the entire cleaned string
+    try { return JSON.parse(normalized); } catch { /* continue */ }
+
+    // Step 3: Extract first JSON object { ... } from the string
+    const match = normalized.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { return JSON.parse(match[0]); } catch { /* continue */ }
+    }
+
+    return null;
   }
 
   getLLMConfig() {
@@ -429,14 +485,14 @@ export class AgentOrchestrator {
   private parseIntent(message: string, session: SessionState): ParsedIntent {
     const lower = message.toLowerCase();
 
-    // List operations
-    if (/列出|查看所有|show all|list/.test(lower) && /提供商|provider/.test(lower)) {
+    // List operations — broad patterns to match various Chinese input styles
+    if (/列出|查看|看.*所有|所有.*看|show all|list|有哪些/.test(lower) && /提供商|provider/.test(lower)) {
       return { type: 'read', toolCalls: [{ toolName: 'list-ai-providers', args: {} }] };
     }
-    if (/列出|查看所有|show all|list/.test(lower) && /路由|route/.test(lower)) {
+    if (/列出|查看|看.*所有|所有.*看|show all|list|有哪些/.test(lower) && /路由|route/.test(lower)) {
       return { type: 'read', toolCalls: [{ toolName: 'list-ai-routes', args: {} }] };
     }
-    if (/整体配置|全局状态|概览|overview/.test(lower)) {
+    if (/整体配置|全局状态|概览|overview|网关状态|gateway status/.test(lower)) {
       return { type: 'read', toolCalls: [{ toolName: 'list-ai-providers', args: {} }, { toolName: 'list-ai-routes', args: {} }] };
     }
 

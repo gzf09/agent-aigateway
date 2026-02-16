@@ -1,0 +1,21 @@
+FROM docker.m.daocloud.io/library/node:20-alpine
+
+RUN corepack enable && corepack prepare pnpm@10.29.3 --activate
+
+WORKDIR /app
+
+# Copy workspace configuration
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json .npmrc ./
+
+# Copy mcp-server-higress app
+COPY apps/mcp-server-higress/package.json apps/mcp-server-higress/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source code
+COPY apps/mcp-server-higress/ apps/mcp-server-higress/
+
+EXPOSE 5000
+
+CMD ["pnpm", "--filter", "@aigateway/mcp-server-higress", "dev"]

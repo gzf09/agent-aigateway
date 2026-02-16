@@ -1,208 +1,96 @@
-import type { AIProvider, AIRoute } from '@aigateway/shared';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import type { MCPToolDefinition } from '@aigateway/shared';
+import type { IMCPClient, MCPClientConfig } from './types.js';
 
-export interface MCPClientConfig {
-  serverUrl: string;
-  higressConsoleUrl: string;
-  auth?: { username: string; password: string };
-  connectTimeout?: number;
-  callTimeout?: number;
-  mockMode?: boolean;
-}
-
-// Mock data store for local development
-export const mockProviders: Map<string, AIProvider> = new Map();
-export const mockRoutes: Map<string, AIRoute> = new Map();
-
-export class HigressMCPClient {
-  private config: MCPClientConfig;
-  private connected = false;
-  private sessionCookie: string | null = null;
+export class StandardMCPClient implements IMCPClient {
+  private client: Client;
+  private transport: SSEClientTransport | null = null;
+  private mcpServerUrl: string;
+  private state: 'connected' | 'disconnected' | 'connecting' | 'error' = 'disconnected';
+  private toolsCache: MCPToolDefinition[] | null = null;
 
   constructor(config: MCPClientConfig) {
-    this.config = config;
+    this.mcpServerUrl = config.mcpServerUrl || 'http://localhost:5000';
+    this.client = new Client({ name: 'aigateway-agent', version: '1.0.0' });
   }
 
   async connect(): Promise<void> {
-    this.connected = true;
+    this.state = 'connecting';
+    try {
+      // If the URL already ends with /sse, use it directly; otherwise append /sse
+      const sseUrl = this.mcpServerUrl.replace(/\/+$/, '').endsWith('/sse')
+        ? this.mcpServerUrl
+        : `${this.mcpServerUrl}/sse`;
+      this.transport = new SSEClientTransport(new URL(sseUrl));
+      await this.client.connect(this.transport);
+      this.state = 'connected';
+      console.log(`[StandardMCPClient] Connected to MCP Server at ${sseUrl}`);
+    } catch (e: unknown) {
+      this.state = 'error';
+      console.error(`[StandardMCPClient] Connection failed: ${(e as Error).message}`);
+      throw e;
+    }
   }
 
   async disconnect(): Promise<void> {
-    this.connected = false;
+    try {
+      await this.client.close();
+    } catch {
+      // ignore close errors
+    }
+    this.state = 'disconnected';
+    this.toolsCache = null;
   }
 
-  getConnectionState() {
-    return this.connected ? 'connected' : 'disconnected';
+  getConnectionState(): 'connected' | 'disconnected' | 'connecting' | 'error' {
+    return this.state;
+  }
+
+  async listTools(): Promise<MCPToolDefinition[]> {
+    if (this.toolsCache) return this.toolsCache;
+
+    if (this.state !== 'connected') {
+      throw new Error('MCP Client is not connected');
+    }
+
+    const result = await this.client.listTools();
+    this.toolsCache = result.tools.map((t) => ({
+      name: t.name,
+      description: t.description || '',
+      inputSchema: (t.inputSchema || {}) as Record<string, unknown>,
+    }));
+    return this.toolsCache;
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<{ success: boolean; data?: unknown; error?: string }> {
-    if (this.config.mockMode) {
-      return this.callToolMock(name, args);
-    }
-    return this.callToolHttp(name, args);
-  }
-
-  private async ensureSession(): Promise<void> {
-    if (this.sessionCookie) return;
-    if (!this.config.auth) return;
-
-    const url = this.config.higressConsoleUrl;
-    try {
-      const resp = await fetch(`${url}/session/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: this.config.auth.username, password: this.config.auth.password }),
-      });
-
-      if (resp.ok) {
-        const setCookie = resp.headers.get('set-cookie');
-        if (setCookie) {
-          this.sessionCookie = setCookie.split(';')[0] || null;
-        }
-        console.log('[MCP] Session login successful');
-      } else {
-        console.log(`[MCP] Session login failed: ${resp.status}`);
-      }
-    } catch (e: unknown) {
-      console.log(`[MCP] Session login error: ${(e as Error).message}`);
-    }
-  }
-
-  private async callToolHttp(name: string, args: Record<string, unknown>) {
-    const url = this.config.higressConsoleUrl;
-
-    await this.ensureSession();
-
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.sessionCookie) {
-      headers['Cookie'] = this.sessionCookie;
+    if (this.state !== 'connected') {
+      return { success: false, error: 'MCP Client is not connected' };
     }
 
     try {
-      const { method, path, body } = this.mapToolToApi(name, args);
+      const result = await this.client.callTool({ name, arguments: args });
 
-      // Log write operations for debugging
-      if (method !== 'GET') {
-        console.log(`[MCP] ${method} ${url}${path}`, body ? JSON.stringify(body) : '');
+      // Parse MCP tool result: extract text content
+      const textContent = result.content as { type: string; text: string }[];
+      const text = textContent
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text)
+        .join('');
+
+      if (result.isError) {
+        return { success: false, error: text || 'Tool call failed' };
       }
 
-      let resp = await fetch(`${url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-
-      // If 401, session may have expired — re-login and retry once
-      if (resp.status === 401) {
-        this.sessionCookie = null;
-        await this.ensureSession();
-        if (this.sessionCookie) {
-          headers['Cookie'] = this.sessionCookie;
-          resp = await fetch(`${url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-        }
+      // Parse JSON response to match existing format
+      try {
+        const data = JSON.parse(text);
+        return { success: true, data };
+      } catch {
+        return { success: true, data: text };
       }
-
-      const data = await resp.json().catch(() => null);
-
-      // Log write operation responses
-      if (method !== 'GET') {
-        console.log(`[MCP] Response: ${resp.status}`, JSON.stringify(data));
-      }
-
-      if (!resp.ok) return { success: false, error: `HTTP ${resp.status}: ${JSON.stringify(data)}` };
-      return { success: true, data };
     } catch (e: unknown) {
       return { success: false, error: (e as Error).message };
-    }
-  }
-
-  private mapToolToApi(name: string, args: Record<string, unknown>): { method: string; path: string; body?: unknown } {
-    const n = args['name'] as string;
-    switch (name) {
-      case 'list-ai-providers': return { method: 'GET', path: '/v1/ai/providers' };
-      case 'get-ai-provider': return { method: 'GET', path: `/v1/ai/providers/${n}` };
-      case 'add-ai-provider': return { method: 'POST', path: '/v1/ai/providers', body: this.buildProviderBody(args) };
-      case 'update-ai-provider': return { method: 'PUT', path: `/v1/ai/providers/${n}`, body: this.buildProviderBody(args) };
-      case 'delete-ai-provider': return { method: 'DELETE', path: `/v1/ai/providers/${n}` };
-      case 'list-ai-routes': return { method: 'GET', path: '/v1/ai/routes' };
-      case 'get-ai-route': return { method: 'GET', path: `/v1/ai/routes/${n}` };
-      case 'add-ai-route': return { method: 'POST', path: '/v1/ai/routes', body: args };
-      case 'update-ai-route': return { method: 'PUT', path: `/v1/ai/routes/${n}`, body: args };
-      case 'delete-ai-route': return { method: 'DELETE', path: `/v1/ai/routes/${n}` };
-      default: return { method: 'GET', path: '/' };
-    }
-  }
-
-  /**
-   * Build the Higress-compatible request body for provider create/update.
-   * Higress requires `rawConfigs` with `apiTokens` (not `tokens`) and `type` for certain provider types (qwen, etc.)
-   */
-  private buildProviderBody(args: Record<string, unknown>): Record<string, unknown> {
-    const body = { ...args };
-    const type = args['type'] as string | undefined;
-    const tokens = args['tokens'] as string[] | undefined;
-    const name = args['name'] as string | undefined;
-
-    // Always build rawConfigs to ensure Higress has provider-specific configurations
-    if (type && tokens) {
-      body['rawConfigs'] = {
-        type,
-        apiTokens: tokens,
-        id: name || type,
-      };
-    }
-
-    return body;
-  }
-
-  private async callToolMock(name: string, args: Record<string, unknown>): Promise<{ success: boolean; data?: unknown; error?: string }> {
-    const n = args['name'] as string | undefined;
-    switch (name) {
-      case 'list-ai-providers':
-        return { success: true, data: { data: Array.from(mockProviders.values()) } };
-      case 'get-ai-provider':
-        if (!n || !mockProviders.has(n)) return { success: false, error: `提供商 ${n} 不存在` };
-        return { success: true, data: { data: mockProviders.get(n) } };
-      case 'add-ai-provider': {
-        if (!n) return { success: false, error: '缺少提供商名称' };
-        if (mockProviders.has(n)) return { success: false, error: `提供商 ${n} 已存在` };
-        const provider: AIProvider = { name: n, type: args['type'] as string, protocol: (args['protocol'] as string) || 'openai/v1', tokens: args['tokens'] as string[], version: '1' };
-        mockProviders.set(n, provider);
-        return { success: true, data: { data: provider } };
-      }
-      case 'update-ai-provider': {
-        if (!n || !mockProviders.has(n)) return { success: false, error: `提供商 ${n} 不存在` };
-        const existing = mockProviders.get(n)!;
-        const updated = { ...existing, ...args, version: String(Number(existing.version || '1') + 1) };
-        mockProviders.set(n, updated);
-        return { success: true, data: { data: updated } };
-      }
-      case 'delete-ai-provider': {
-        if (!n || !mockProviders.has(n)) return { success: false, error: `提供商 ${n} 不存在` };
-        mockProviders.delete(n);
-        return { success: true, data: { message: `提供商 ${n} 已删除` } };
-      }
-      case 'list-ai-routes':
-        return { success: true, data: { data: Array.from(mockRoutes.values()) } };
-      case 'get-ai-route':
-        if (!n || !mockRoutes.has(n)) return { success: false, error: `路由 ${n} 不存在` };
-        return { success: true, data: { data: mockRoutes.get(n) } };
-      case 'add-ai-route': {
-        if (!n) return { success: false, error: '缺少路由名称' };
-        if (mockRoutes.has(n)) return { success: false, error: `路由 ${n} 已存在` };
-        const route: AIRoute = { name: n, upstreams: args['upstreams'] as AIRoute['upstreams'], fallbackConfig: args['fallbackConfig'] as AIRoute['fallbackConfig'], version: '1' };
-        mockRoutes.set(n, route);
-        return { success: true, data: { data: route } };
-      }
-      case 'update-ai-route': {
-        if (!n || !mockRoutes.has(n)) return { success: false, error: `路由 ${n} 不存在` };
-        const existingRoute = mockRoutes.get(n)!;
-        const updatedRoute = { ...existingRoute, ...args, version: String(Number(existingRoute.version || '1') + 1) };
-        mockRoutes.set(n, updatedRoute);
-        return { success: true, data: { data: updatedRoute } };
-      }
-      case 'delete-ai-route': {
-        if (!n || !mockRoutes.has(n)) return { success: false, error: `路由 ${n} 不存在` };
-        mockRoutes.delete(n);
-        return { success: true, data: { message: `路由 ${n} 已删除` } };
-      }
-      default:
-        return { success: false, error: `未知工具: ${name}` };
     }
   }
 }

@@ -7,7 +7,7 @@ config({ path: resolve(__dirname, '../../../.env') });
 
 import express from 'express';
 import cors from 'cors';
-import { HigressMCPClient, ALL_TOOLS } from '@aigateway/mcp-client';
+import { createMCPClient, type IMCPClient } from '@aigateway/mcp-client';
 import { AgentOrchestrator } from './engine/orchestrator.js';
 import { MetricsCollector } from './metrics/index.js';
 
@@ -19,16 +19,22 @@ const PORT = parseInt(process.env['AGENT_ENGINE_PORT'] || '4000', 10);
 const REDIS_URL = process.env['REDIS_URL'] || 'redis://localhost:6379';
 const MOCK_MODE = process.env['MOCK_MODE'] === 'true';
 
-const higressAuth = process.env['HIGRESS_CONSOLE_USERNAME'] && process.env['HIGRESS_CONSOLE_PASSWORD']
-  ? { username: process.env['HIGRESS_CONSOLE_USERNAME'], password: process.env['HIGRESS_CONSOLE_PASSWORD'] }
-  : undefined;
-
-const mcpClient = new HigressMCPClient({
-  serverUrl: process.env['MCP_SERVER_URL'] || '',
-  higressConsoleUrl: process.env['HIGRESS_CONSOLE_URL'] || 'http://localhost:8001',
-  auth: higressAuth,
+const mcpClient: IMCPClient = createMCPClient({
+  mcpServerUrl: process.env['MCP_SERVER_URL'] || 'http://localhost:5000',
   mockMode: MOCK_MODE,
 });
+
+// Connect to MCP Server with retry
+async function connectMCP() {
+  try {
+    await mcpClient.connect();
+    console.log('[Agent] MCP Client connected');
+  } catch (e: unknown) {
+    console.error(`[Agent] MCP Client connection failed: ${(e as Error).message}, retrying in 5s...`);
+    setTimeout(connectMCP, 5000);
+  }
+}
+connectMCP();
 
 const orchestrator = new AgentOrchestrator(mcpClient, REDIS_URL);
 const metrics = new MetricsCollector();
@@ -46,6 +52,29 @@ app.get('/agent/health', (_req, res) => {
       provider: llmConfig.provider,
       model: llmConfig.model,
     },
+    mcp: {
+      connected: mcpClient.getConnectionState() === 'connected',
+      serverUrl: process.env['MCP_SERVER_URL'] || 'http://localhost:5000',
+    },
+  });
+});
+
+// MCP status
+app.get('/agent/mcp-status', async (_req, res) => {
+  const state = mcpClient.getConnectionState();
+  let tools: { name: string; description: string }[] = [];
+  try {
+    const toolList = await mcpClient.listTools();
+    tools = toolList.map(t => ({ name: t.name, description: t.description }));
+  } catch {
+    // tools unavailable
+  }
+  res.json({
+    connected: state === 'connected',
+    state,
+    serverUrl: process.env['MCP_SERVER_URL'] || 'http://localhost:5000',
+    toolCount: tools.length,
+    tools,
   });
 });
 
@@ -146,9 +175,16 @@ app.get('/agent/timeline', async (req, res) => {
   res.json({ data: timeline });
 });
 
-// List tools
-app.get('/agent/tools', (_req, res) => {
-  res.json({ data: ALL_TOOLS });
+// List tools (dynamic discovery from MCP Server)
+app.get('/agent/tools', async (_req, res) => {
+  try {
+    const tools = await mcpClient.listTools();
+    res.json({ data: tools });
+  } catch {
+    // Fallback to static tools if MCP not connected
+    const { ALL_TOOLS } = await import('@aigateway/mcp-client');
+    res.json({ data: ALL_TOOLS });
+  }
 });
 
 // List providers directly

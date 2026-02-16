@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentOrchestrator } from '../engine/orchestrator.js';
-import { HigressMCPClient, mockProviders, mockRoutes } from '@aigateway/mcp-client';
+import { MockMCPClient, mockProviders, mockRoutes } from '@aigateway/mcp-client';
 import type { AgentResponseChunk } from '@aigateway/shared';
 
 async function collectChunks(gen: AsyncGenerator<AgentResponseChunk>): Promise<AgentResponseChunk[]> {
@@ -18,9 +18,7 @@ describe('AgentOrchestrator', () => {
   beforeEach(() => {
     mockProviders.clear();
     mockRoutes.clear();
-    const mcpClient = new HigressMCPClient({
-      serverUrl: '', higressConsoleUrl: 'http://localhost:8080', mockMode: true,
-    });
+    const mcpClient = new MockMCPClient();
     orchestrator = new AgentOrchestrator(mcpClient);
   });
 

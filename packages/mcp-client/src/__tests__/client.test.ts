@@ -1,17 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { HigressMCPClient, mockProviders, mockRoutes } from '../index.js';
+import { MockMCPClient, mockProviders, mockRoutes } from '../index.js';
 
-describe('HigressMCPClient', () => {
-  let client: HigressMCPClient;
+describe('MockMCPClient', () => {
+  let client: MockMCPClient;
 
   beforeEach(() => {
     mockProviders.clear();
     mockRoutes.clear();
-    client = new HigressMCPClient({
-      serverUrl: '',
-      higressConsoleUrl: 'http://localhost:8080',
-      mockMode: true,
-    });
+    client = new MockMCPClient();
   });
 
   describe('connection state', () => {
@@ -28,6 +24,15 @@ describe('HigressMCPClient', () => {
       await client.connect();
       await client.disconnect();
       expect(client.getConnectionState()).toBe('disconnected');
+    });
+  });
+
+  describe('listTools', () => {
+    it('should return all tools', async () => {
+      const tools = await client.listTools();
+      expect(tools.length).toBe(10);
+      expect(tools.map(t => t.name)).toContain('list-ai-providers');
+      expect(tools.map(t => t.name)).toContain('list-ai-routes');
     });
   });
 

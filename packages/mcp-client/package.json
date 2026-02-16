@@ -9,6 +9,9 @@
     ".": "./src/index.ts"
   },
   "scripts": { "build": "tsc", "type-check": "tsc --noEmit", "test": "vitest run" },
-  "dependencies": { "@aigateway/shared": "workspace:*" },
+  "dependencies": {
+    "@aigateway/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
   "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.0" }
 }
