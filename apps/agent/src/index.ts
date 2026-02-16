@@ -40,7 +40,7 @@ app.get('/agent/health', (_req, res) => {
     status: 'ok',
     mock: MOCK_MODE,
     timestamp: Date.now(),
-    higressConsoleUrl: process.env['HIGRESS_CONSOLE_URL'] || 'http://localhost:8001',
+    higressConsoleUrl: process.env['HIGRESS_CONSOLE_EXTERNAL_URL'] || process.env['HIGRESS_CONSOLE_URL'] || 'http://localhost:8001',
     llm: {
       available: llmConfig.available,
       provider: llmConfig.provider,
@@ -54,7 +54,7 @@ app.get('/agent/llm-config', (_req, res) => {
   res.json({ data: orchestrator.getLLMConfig() });
 });
 
-app.put('/agent/llm-config', (req, res) => {
+app.post('/agent/llm-config', (req, res) => {
   const { provider, apiKey, baseURL, model } = req.body as {
     provider?: string; apiKey?: string; baseURL?: string; model?: string;
   };

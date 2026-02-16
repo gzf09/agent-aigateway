@@ -1,0 +1,75 @@
+services:
+  higress:
+    image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/all-in-one:latest
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.agent
+    environment:
+      - AGENT_ENGINE_PORT=4000
+      - REDIS_URL=redis://redis:6379
+      - MOCK_MODE=${MOCK_MODE:-false}
+      - HIGRESS_CONSOLE_URL=http://higress:8001
+      - HIGRESS_CONSOLE_EXTERNAL_URL=/login
+      - MCP_SERVER_URL=
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-}
+      - HIGRESS_CONSOLE_USERNAME=${HIGRESS_CONSOLE_USERNAME:-admin}
+      - HIGRESS_CONSOLE_PASSWORD=${HIGRESS_CONSOLE_PASSWORD:-admin}
+      - FEATURE_ROLLBACK_ENABLED=${FEATURE_ROLLBACK_ENABLED:-true}
+      - FEATURE_DASHBOARD_ENABLED=${FEATURE_DASHBOARD_ENABLED:-true}
+      - FEATURE_PREDICTIVE_FORM_ENABLED=${FEATURE_PREDICTIVE_FORM_ENABLED:-true}
+      - FEATURE_PREPROCESSOR_ENABLED=${FEATURE_PREPROCESSOR_ENABLED:-true}
+      - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-50}
+      - MAX_CHANGELOG_DEPTH=${MAX_CHANGELOG_DEPTH:-50}
+      - SESSION_TTL_SECONDS=${SESSION_TTL_SECONDS:-7200}
+    depends_on:
+      higress:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bff:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.bff
+    environment:
+      - BFF_PORT=3000
+      - AGENT_URL=http://agent:4000
+      - SESSION_SECRET=${SESSION_SECRET:-aigateway-agent-prod-secret}
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.web
+    ports:
+      - "80:5173"
+    environment:
+      - VITE_BFF_URL=http://bff:3000
+      - VITE_HIGRESS_URL=http://higress:8001
+    depends_on:
+      - bff
+    restart: unless-stopped

@@ -54,7 +54,7 @@ export function LLMConfigDialog({ open, onClose }: Props) {
       if (apiKey) body.apiKey = apiKey;
       if (baseURL) body.baseURL = baseURL;
       const resp = await fetch('/api/session/llm-config', {
-        method: 'PUT',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });

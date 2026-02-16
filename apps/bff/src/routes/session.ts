@@ -79,11 +79,11 @@ export function sessionRoutes(agentUrl: string): RouterType {
     }
   });
 
-  // Proxy LLM config PUT
-  router.put('/llm-config', async (req, res) => {
+  // Proxy LLM config POST
+  router.post('/llm-config', async (req, res) => {
     try {
       const resp = await fetch(`${agentUrl}/agent/llm-config`, {
-        method: 'PUT',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req.body),
       });

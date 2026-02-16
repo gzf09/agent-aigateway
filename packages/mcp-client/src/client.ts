@@ -16,6 +16,7 @@ export const mockRoutes: Map<string, AIRoute> = new Map();
 export class HigressMCPClient {
   private config: MCPClientConfig;
   private connected = false;
+  private sessionCookie: string | null = null;
 
   constructor(config: MCPClientConfig) {
     this.config = config;
@@ -40,11 +41,40 @@ export class HigressMCPClient {
     return this.callToolHttp(name, args);
   }
 
+  private async ensureSession(): Promise<void> {
+    if (this.sessionCookie) return;
+    if (!this.config.auth) return;
+
+    const url = this.config.higressConsoleUrl;
+    try {
+      const resp = await fetch(`${url}/session/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: this.config.auth.username, password: this.config.auth.password }),
+      });
+
+      if (resp.ok) {
+        const setCookie = resp.headers.get('set-cookie');
+        if (setCookie) {
+          this.sessionCookie = setCookie.split(';')[0] || null;
+        }
+        console.log('[MCP] Session login successful');
+      } else {
+        console.log(`[MCP] Session login failed: ${resp.status}`);
+      }
+    } catch (e: unknown) {
+      console.log(`[MCP] Session login error: ${(e as Error).message}`);
+    }
+  }
+
   private async callToolHttp(name: string, args: Record<string, unknown>) {
     const url = this.config.higressConsoleUrl;
+
+    await this.ensureSession();
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.config.auth) {
-      headers['Authorization'] = 'Basic ' + Buffer.from(`${this.config.auth.username}:${this.config.auth.password}`).toString('base64');
+    if (this.sessionCookie) {
+      headers['Cookie'] = this.sessionCookie;
     }
 
     try {
@@ -55,7 +85,18 @@ export class HigressMCPClient {
         console.log(`[MCP] ${method} ${url}${path}`, body ? JSON.stringify(body) : '');
       }
 
-      const resp = await fetch(`${url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+      let resp = await fetch(`${url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+
+      // If 401, session may have expired — re-login and retry once
+      if (resp.status === 401) {
+        this.sessionCookie = null;
+        await this.ensureSession();
+        if (this.sessionCookie) {
+          headers['Cookie'] = this.sessionCookie;
+          resp = await fetch(`${url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+        }
+      }
+
       const data = await resp.json().catch(() => null);
 
       // Log write operation responses

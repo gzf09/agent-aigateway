@@ -35,14 +35,16 @@ Higress AI Gateway 的配置管理涉及多个概念（提供商、路由、权�
 │  (React)     │ WS  │  (Express)   │ SSE │  (Orchestrator)  │ HTTP│  AI Gateway │
 │  :5173       │     │  :3000       │     │  :4000           │     │  :8080      │
 └──────────────┘     └──────────────┘     └──────────────────┘     └─────────────┘
-                                                   │
-                                                   ▼
-                                          ┌─────────────────┐
-                                          │     Redis       │
-                                          │  (会话/变更日志) │
-                                          │  :6379          │
-                                          └─────────────────┘
+        │                                          │
+        │  Vite Proxy                              ▼
+        │  (/login,/css,/js,/session,/v1)  ┌─────────────────┐
+        └─────────────────────────────────▶│     Redis       │
+           Higress Console 反向代理         │  (会话/变更日志) │
+                                           │  :6379          │
+                                           └─────────────────┘
 ```
+
+Web 层通过 Vite 反向代理同时承载前端应用和 Higress Console，用户在同一端口即可访问两个界面。
 
 ### 技术栈
 
@@ -50,12 +52,12 @@ Higress AI Gateway 的配置管理涉及多个概念（提供商、路由、权�
 |------|------|
 | 前端 | React 18 + TypeScript + Vite + Tailwind CSS + Zustand |
 | BFF | Express 5 + WebSocket (ws) |
-| Agent 引擎 | Express 4 + 规则引擎 + AI SDK |
-| MCP 客户端 | 自研 HigressMCPClient（HTTP/Mock 双模式） |
+| Agent 引擎 | Express 4 + 规则引擎 + Vercel AI SDK |
+| MCP 客户端 | 自研 HigressMCPClient（HTTP Session 认证 / Mock 双模式） |
 | 存储 | Redis（变更日志 + 会话）/ 内存 Fallback |
 | 构建 | pnpm Workspace + Turborepo |
 | 测试 | Vitest |
-| 部署 | Docker Compose |
+| 部署 | Docker Compose（开发 + 生产） |
 
 ### Monorepo 结构
 
@@ -67,6 +69,8 @@ aigateway-agent/
 │   │       ├── index.ts        # Express 服务 + API 端点
 │   │       ├── engine/
 │   │       │   └── orchestrator.ts   # 意图解析 + 工具编排
+│   │       ├── llm/
+│   │       │   └── llmService.ts     # LLM API 管理（多 Provider）
 │   │       ├── safety/
 │   │       │   ├── preprocessor.ts   # 静态规则引擎 (R001-R007)
 │   │       │   └── riskAssessor.ts   # 风险评估 + 确认卡片
@@ -78,7 +82,8 @@ aigateway-agent/
 │   │       ├── metrics/
 │   │       │   └── collector.ts      # 指标采集
 │   │       └── prompts/
-│   │           └── system.ts         # 系统提示词
+│   │           ├── system.ts         # 系统提示词
+│   │           └── intentParsing.ts  # 意图解析提示词
 │   ├── bff/                    # Backend For Frontend
 │   │   └── src/
 │   │       ├── index.ts        # Express + WebSocket 服务
@@ -89,15 +94,26 @@ aigateway-agent/
 │   │           └── chatGateway.ts  # WebSocket 网关
 │   └── web/                    # React 前端
 │       └── src/
-│           ├── components/     # ChatPanel, Dashboard, ConfirmCards...
-│           ├── stores/         # Zustand 状态管理
+│           ├── components/     # ChatPanel, Dashboard, ConfirmCards, LLMConfigDialog...
+│           ├── stores/         # Zustand 状态管理 (chat, dashboard, theme, debug)
 │           └── hooks/          # 自定义 Hooks
 ├── packages/
 │   ├── shared/                 # 共享类型、常量、工具函数
-│   ├── mcp-client/             # Higress MCP 客户端
+│   ├── mcp-client/             # Higress MCP 客户端（Session 认证 + Mock）
 │   └── ui-components/          # 可复用 UI 组件
 └── deploy/
-    └── docker/                 # Docker Compose 部署配置
+    ├── docker/                 # Docker Compose + Dockerfile
+    │   ├── docker-compose.yml         # 开发环境
+    │   ├── docker-compose.prod.yml    # 生产环境
+    │   ├── docker-compose.infra.yml   # 仅基础设施
+    │   ├── Dockerfile.web
+    │   ├── Dockerfile.bff
+    │   └── Dockerfile.agent
+    └── scripts/                # 部署脚本
+        ├── server-setup.sh     # 服务器初始化
+        ├── deploy.sh           # 部署执行
+        ├── verify.sh           # 健康验证
+        └── e2e-test.sh         # 端到端测试
 ```
 
 ### Agent 引擎处理流程
@@ -107,7 +123,7 @@ aigateway-agent/
   │
   ▼
 ┌─────────────────┐
-│  意图解析        │  规则匹配: 列出/创建/删除/更新/回滚/默认
+│  意图解析        │  正则匹配 + LLM 解析（可选）
 │  (parseIntent)   │
 └────────┬────────┘
          │
@@ -152,7 +168,7 @@ aigateway-agent/
 | R005 | 路由权重总和 ≠ 100 | **拦截** |
 | R007 | 3 个以上写操作（批量） | 附加警告 |
 
-### MCP 客户端工具集
+### MCP 客户端
 
 10 个工具覆盖提供商和路由的完整 CRUD：
 
@@ -168,6 +184,8 @@ aigateway-agent/
 | `add-ai-route` | 写 | 创建路由 |
 | `update-ai-route` | 写 | 更新路由 |
 | `delete-ai-route` | 写 | 删除路由 |
+
+MCP 客户端通过 Higress Console 的 Session 认证（`POST /session/login`）获取会话 Cookie，并在 401 时自动重新登录重试。Mock 模式下数据存储在内存中，无需 Higress 实例。
 
 ## 快速开始
 
@@ -193,7 +211,7 @@ pnpm dev:web     # Web 前端   → http://localhost:5173
 
 Mock 模式下无需 Higress 和 Redis，所有数据存储在内存中。
 
-### Docker Compose 部署
+### Docker Compose 部署（开发）
 
 ```bash
 # 启动全部服务（Higress + Redis + Agent + BFF + Web）
@@ -206,15 +224,49 @@ pnpm docker:logs
 pnpm docker:down
 ```
 
-服务地址：
+### Docker Compose 部署（生产）
+
+```bash
+# 使用生产配置启动
+docker compose -f deploy/docker/docker-compose.prod.yml --env-file .env up --build -d
+
+# 查看日志
+docker compose -f deploy/docker/docker-compose.prod.yml logs -f
+
+# 停止
+docker compose -f deploy/docker/docker-compose.prod.yml down
+```
+
+生产模式与开发模式的区别：
+
+| 差异 | 开发模式 | 生产模式 |
+|------|---------|---------|
+| MOCK_MODE | true | false |
+| Web 端口 | 5173 | 80 |
+| 重启策略 | 无 | unless-stopped |
+| Higress 健康检查 | 默认 | start_period: 30s, retries: 10 |
+| BFF/Agent/Redis 端口 | 暴露到宿主机 | 仅容器内网 |
+| Higress Console | 独立端口访问 | 通过 Web 反向代理（`/login`） |
+
+### 服务地址
+
+**开发模式：**
 
 | 服务 | 地址 | 说明 |
 |------|------|------|
 | Web UI | http://localhost:5173 | 浏览器打开 |
 | BFF API | http://localhost:3000 | REST + WebSocket |
 | Agent Engine | http://localhost:4000 | SSE 流式响应 |
-| Higress Console | http://localhost:8080 | AI Gateway 管理 |
+| Higress Console | http://localhost:8001 | AI Gateway 管理 |
 | Redis | localhost:6379 | 会话存储 |
+
+**生产模式：**
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| Web UI | http://\<server-ip\>:80 | 主入口 |
+| Higress Console | http://\<server-ip\>:80/login | 通过 Web 反向代理 |
+| BFF / Agent / Redis | 容器内网 | 不暴露外部端口 |
 
 ### 环境变量
 
@@ -223,11 +275,23 @@ pnpm docker:down
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MOCK_MODE` | `true` | Mock 模式（无需 Higress） |
-| `HIGRESS_CONSOLE_URL` | `http://localhost:8080` | Higress Console 地址 |
+| `HIGRESS_CONSOLE_URL` | `http://localhost:8001` | Higress Console 内部地址 |
+| `HIGRESS_CONSOLE_EXTERNAL_URL` | `/login` | Higress Console 前端访问地址 |
+| `HIGRESS_CONSOLE_USERNAME` | `admin` | Higress Console 用户名 |
+| `HIGRESS_CONSOLE_PASSWORD` | `admin` | Higress Console 密码 |
 | `REDIS_URL` | `redis://localhost:6379` | Redis 连接地址 |
-| `LLM_API_KEY` | - | LLM API Key（可选，用于智能意图解析） |
-| `LLM_MODEL` | `gpt-4o` | LLM 模型名称 |
-| `AGENT_URL` | - | Agent 地址（Docker 模式下设为 `http://agent:4000`） |
+| `LLM_PROVIDER` | - | LLM 提供商（openai/qwen/deepseek/claude 等） |
+| `LLM_API_KEY` | - | LLM API Key |
+| `LLM_BASE_URL` | - | LLM API 端点（可选，自动推断） |
+| `LLM_MODEL` | - | LLM 模型名称（如 gpt-4o、qwen-plus） |
+| `SESSION_SECRET` | - | BFF 会话密钥 |
+| `FEATURE_ROLLBACK_ENABLED` | `true` | 启用回滚功能 |
+| `FEATURE_DASHBOARD_ENABLED` | `true` | 启用仪表盘 |
+| `FEATURE_PREDICTIVE_FORM_ENABLED` | `true` | 启用预测表单 |
+| `FEATURE_PREPROCESSOR_ENABLED` | `true` | 启用安全预处理器 |
+| `MAX_CONCURRENT_SESSIONS` | `50` | 最大并发会话数 |
+| `MAX_CHANGELOG_DEPTH` | `50` | 变更日志最大深度 |
+| `SESSION_TTL_SECONDS` | `7200` | 会话过期时间（秒） |
 
 ## 运行测试
 
@@ -250,6 +314,8 @@ pnpm test
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/agent/health` | 健康检查 |
+| GET | `/agent/llm-config` | 获取 LLM 配置 |
+| POST | `/agent/llm-config` | 更新 LLM 配置 |
 | POST | `/agent/message` | 处理用户消息（SSE 流） |
 | POST | `/agent/confirm` | 确认/取消操作 |
 | POST | `/agent/rollback` | 回滚上一步 |
@@ -266,11 +332,29 @@ pnpm test
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | POST | `/api/session/create` | 创建会话 |
+| GET | `/api/session/health` | Agent 健康代理 |
 | POST | `/api/session/message` | 代理消息（SSE） |
+| POST | `/api/session/confirm` | 代理确认操作 |
+| GET | `/api/session/llm-config` | 获取 LLM 配置 |
+| POST | `/api/session/llm-config` | 更新 LLM 配置 |
 | GET | `/api/dashboard/providers` | 查询提供商 |
 | GET | `/api/dashboard/routes` | 查询路由 |
 | GET | `/api/dashboard/metrics` | 查询指标 |
 | WS | `/ws` | WebSocket 实时通信 |
+
+### Vite 反向代理（生产模式）
+
+Web 层通过 Vite 反向代理将 Higress Console 嵌入同一端口：
+
+| 路径 | 代理目标 | 说明 |
+|------|---------|------|
+| `/api/*` | BFF | 业务 API |
+| `/ws` | BFF | WebSocket |
+| `/css/*`, `/js/*` | Higress | 控制台静态资源 |
+| `/session/*` | Higress | 控制台认证 |
+| `/v1/*` | Higress | 控制台 API |
+| `/system/*` | Higress | 控制台系统接口 |
+| `/login`, `/init` 等 HTML 页面 | Higress | 控制台 SPA 路由（通过 Vite 插件） |
 
 ## 使用示例
 
@@ -298,6 +382,55 @@ pnpm test
 "回滚上一步"
 "撤销"
 ```
+
+## 部署到云服务器
+
+### 前置条件
+
+- 云服务器（CentOS 7 / Ubuntu 等）
+- Docker CE + Docker Compose v2
+- 开放外网端口（如 80 或自定义端口）
+
+### 步骤
+
+1. **服务器环境准备**：安装 Docker，配置镜像加速
+
+   ```bash
+   # 使用提供的初始化脚本
+   bash deploy/scripts/server-setup.sh
+   ```
+
+2. **传输代码**
+
+   ```bash
+   rsync -avz --exclude={node_modules,.turbo,dist,.git} \
+     -e "ssh -p <ssh-port>" \
+     ./ root@<server-ip>:/data/project/aigateway-agent/
+   ```
+
+3. **配置环境变量**：将 `.env` 复制到服务器并修改 LLM 相关配置
+
+4. **构建并启动**
+
+   ```bash
+   docker compose -f deploy/docker/docker-compose.prod.yml --env-file .env up --build -d
+   ```
+
+5. **验证**
+
+   ```bash
+   bash deploy/scripts/verify.sh
+   ```
+
+### Docker 镜像源说明
+
+Dockerfile 中使用的基础镜像已配置为国内可用的镜像源：
+
+- Node.js: `docker.m.daocloud.io/library/node:20-alpine`
+- Redis: `docker.m.daocloud.io/library/redis:7-alpine`
+- npm 包: `.npmrc` 配置 `registry.npmmirror.com`
+
+如在海外环境部署，可将镜像源替换回官方源。
 
 ## License
 
